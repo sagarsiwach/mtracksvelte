@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+	body {
+		@apply antialiased;
+	}
+}
+
+@layer components {
+	.ibm-button-primary {
+		@apply bg-ibm-blue hover:bg-ibm-blue-60 focus:ring-ibm-blue disabled:bg-ibm-gray-60 px-4 py-2 font-medium text-white transition-colors focus:ring-2 focus:ring-offset-2 focus:outline-none disabled:cursor-not-allowed;
+	}
+
+	.ibm-button-secondary {
+		@apply bg-ibm-gray-80 hover:bg-ibm-gray-70 focus:ring-ibm-gray-60 disabled:bg-ibm-gray-90 px-4 py-2 font-medium text-white transition-colors focus:ring-2 focus:ring-offset-2 focus:outline-none disabled:cursor-not-allowed;
+	}
+
+	.ibm-input {
+		@apply border-ibm-gray-60 bg-ibm-gray-80 focus:border-ibm-blue placeholder:text-ibm-gray-40 w-full border px-4 py-2 text-white focus:outline-none;
+	}
+
+	.ibm-label {
+		@apply text-ibm-gray-30 mb-1 block text-sm font-medium;
+	}
+
+	.ibm-card {
+		@apply bg-ibm-gray-90 border-ibm-gray-80 border p-5;
+	}
+}
