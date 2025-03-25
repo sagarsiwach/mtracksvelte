@@ -17,6 +17,10 @@
 	let rawResponse = null; // For debugging
 	let activeTab = 0; // Track active tab
 
+	// Touch handling variables
+	let touchStartX = 0;
+	let touchEndX = 0;
+
 	// API endpoint
 	const API_URL = 'https://automator.congzhoumachinery.com/webhook/mantras';
 
@@ -143,6 +147,37 @@
 		return name.charAt(0).toUpperCase() + name.slice(1);
 	}
 
+	// Handle swipe gestures
+	function handleTouchStart(e) {
+		touchStartX = e.touches[0].clientX;
+	}
+
+	function handleTouchEnd(e) {
+		touchEndX = e.changedTouches[0].clientX;
+		handleSwipe();
+	}
+
+	function handleSwipe() {
+		const swipeThreshold = 50; // Minimum distance for a swipe
+		const swipeDistance = touchEndX - touchStartX;
+
+		if (Math.abs(swipeDistance) < swipeThreshold) {
+			return; // Not a swipe, just a tap
+		}
+
+		if (mantras.length <= 1) {
+			return; // No need for navigation with 0 or 1 mantra
+		}
+
+		if (swipeDistance > 0) {
+			// Swipe right - go to previous tab
+			activeTab = activeTab === 0 ? mantras.length - 1 : activeTab - 1;
+		} else {
+			// Swipe left - go to next tab
+			activeTab = activeTab === mantras.length - 1 ? 0 : activeTab + 1;
+		}
+	}
+
 	// Fetch mantras on component mount
 	onMount(() => {
 		console.log('Component mounted, fetching mantras...');
@@ -150,9 +185,13 @@
 	});
 </script>
 
-<main class="min-h-screen bg-gradient-to-b from-green-50 to-teal-50 font-['IBM_Plex_Serif']">
+<main
+	class="flex h-[100vh] min-h-screen flex-col overflow-hidden bg-gradient-to-b from-green-50 to-teal-50 font-['IBM_Plex_Serif']"
+	on:touchstart={handleTouchStart}
+	on:touchend={handleTouchEnd}
+>
 	<!-- Header -->
-	<header class="bg-white py-5 shadow-sm">
+	<header class="bg-white py-4 shadow-sm">
 		<div class="container mx-auto max-w-md px-4">
 			<div class="flex flex-col">
 				<h1 class="text-2xl font-medium text-teal-700">Mantra Tracker</h1>
@@ -163,7 +202,7 @@
 		</div>
 	</header>
 
-	<div class="container mx-auto max-w-md px-4 py-6">
+	<div class="container mx-auto max-w-md flex-grow overflow-y-auto px-4 py-4">
 		<!-- Error message -->
 		{#if error}
 			<div class="mb-6 rounded-r-md border-l-4 border-rose-500 bg-rose-50 p-4 shadow-sm">
@@ -352,6 +391,11 @@
 			<!-- Tab content with donut chart -->
 			<div class="mb-6 rounded-b-lg bg-white p-6 shadow-md">
 				{#if mantras[activeTab]}
+					<!-- Swipe indicator -->
+					<div class="mb-3 text-center text-xs text-teal-500 select-none">
+						<span>← Swipe to navigate →</span>
+					</div>
+
 					<div class="mb-4 text-center">
 						<h3 class="text-2xl font-medium text-teal-700">
 							{formatMantraName(mantras[activeTab].name)} Mantra
@@ -454,9 +498,20 @@
 	</div>
 
 	<!-- Footer -->
-	<footer class="mt-auto py-6 text-center text-sm text-teal-700">
+	<footer class="border-t border-teal-100 bg-white py-4 text-center text-sm text-teal-700">
 		<div class="container mx-auto max-w-md px-4">
 			<p>🙏 Sat Saheb 🙏</p>
 		</div>
 	</footer>
 </main>
+
+<style>
+	/* Prevent overscroll bounce effect on mobile */
+	:global(body) {
+		overscroll-behavior: none;
+		position: fixed;
+		width: 100%;
+		height: 100%;
+		overflow: hidden;
+	}
+</style>
