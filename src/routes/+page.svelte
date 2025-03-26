@@ -92,13 +92,23 @@
 		}, 100); // Small delay to ensure DOM is updated
 	}
 
+	
+
+
 	// Modify onMount to center the slider on today when component loads
 	onMount(() => {
 		console.log('Component mounted, fetching mantras...');
 		fetchMantrasForDate(selectedDate);
 		centerDateInSlider(selectedDate);
-	});
 
+		// Register service worker
+		if ('serviceWorker' in navigator) {
+			navigator.serviceWorker
+				.register('/service-worker.js')
+				.then((reg) => console.log('Service Worker registered', reg))
+				.catch((err) => console.error('Service Worker registration failed:', err));
+		}
+	});
 	// Navigation functions
 	function navigateDate(direction) {
 		const newDate = addDays(selectedDate, direction);
@@ -683,7 +693,7 @@
 									class="flex-1 px-4 py-3 text-center transition-colors {activeTab === index
 										? 'border-b-2 border-teal-500 bg-teal-50 font-medium text-teal-700'
 										: 'text-teal-600 hover:bg-teal-50'}"
-									on:click={() => (activeTab = index)}
+									on:click={() => switchTab(index)}
 									aria-selected={activeTab === index}
 									role="tab"
 								>
