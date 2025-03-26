@@ -24,6 +24,7 @@
 	let newMantra = '';
 	let rawResponse = null; // For debugging
 	let isOnline = true; // Track online status
+	let syncQueue = []; // Queue for storing offline increments
 
 	// Date navigation state
 	let selectedDate = new Date(); // Default to today
@@ -119,11 +120,109 @@
 		}, 100); // Small delay to ensure DOM is updated
 	}
 
+	// Sync queue manipulation
+	function getSyncQueue() {
+		try {
+			const queue = localStorage.getItem('mantra_sync_queue');
+			return queue ? JSON.parse(queue) : [];
+		} catch (e) {
+			console.error('Failed to get sync queue:', e);
+			return [];
+		}
+	}
+
+	function saveSyncQueue(queue) {
+		try {
+			localStorage.setItem('mantra_sync_queue', JSON.stringify(queue));
+		} catch (e) {
+			console.error('Failed to save sync queue:', e);
+		}
+	}
+
+	function addToSyncQueue(mantraName, date) {
+		const formattedDate = format(date, 'yyyy-MM-dd');
+		const queue = getSyncQueue();
+		queue.push({ mantraName, date: formattedDate });
+		saveSyncQueue(queue);
+		syncQueue = queue; // Update local state
+	}
+
+	// Process pending sync items
+	async function processSyncQueue() {
+		if (!isOnline || syncQueue.length === 0) return;
+
+		console.log(`Processing sync queue with ${syncQueue.length} items...`);
+
+		// Process each item one by one
+		const queue = [...syncQueue];
+		syncQueue = []; // Clear local queue
+		saveSyncQueue([]); // Clear stored queue
+
+		// Process each sync item individually
+		for (const item of queue) {
+			try {
+				console.log(`Syncing ${item.mantraName} for date ${item.date}...`);
+
+				await fetch(API_URL, {
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/json'
+					},
+					body: JSON.stringify({
+						mantraName: item.mantraName,
+						date: item.date
+					})
+				});
+
+				// Small delay between requests to prevent overwhelming the server
+				await new Promise((resolve) => setTimeout(resolve, 300));
+			} catch (err) {
+				console.error(`Failed to sync item: ${JSON.stringify(item)}`, err);
+				// If this item fails, add it back to the queue
+				addToSyncQueue(item.mantraName, new Date(item.date));
+			}
+		}
+
+		// After syncing, refresh the current view
+		await fetchMantrasForDate(selectedDate);
+	}
+
 	// Check online status
 	function checkOnlineStatus() {
+		const wasOffline = !isOnline;
 		isOnline = navigator.onLine;
+
 		if (!isOnline) {
 			console.log('App is offline, using cached data');
+		} else if (wasOffline && isOnline) {
+			// If we just came back online, process the sync queue
+			console.log('App is back online, processing sync queue');
+			processSyncQueue();
+		}
+	}
+
+	// Haptic feedback function
+	function triggerHapticFeedback(type = 'medium') {
+		if (!('vibrate' in navigator)) return;
+
+		switch (type) {
+			case 'light':
+				navigator.vibrate(10);
+				break;
+			case 'medium':
+				navigator.vibrate(20);
+				break;
+			case 'heavy':
+				navigator.vibrate([30, 30, 30]);
+				break;
+			case 'success':
+				navigator.vibrate([15, 50, 30]);
+				break;
+			case 'error':
+				navigator.vibrate([50, 20, 50, 20, 50]);
+				break;
+			default:
+				navigator.vibrate(20);
 		}
 	}
 
@@ -131,13 +230,15 @@
 	onMount(() => {
 		console.log('Component mounted, fetching mantras...');
 		checkOnlineStatus();
+		syncQueue = getSyncQueue();
 
 		// Add online/offline event listeners
 		window.addEventListener('online', () => {
-			isOnline = true;
 			console.log('App is back online');
-			fetchMantrasForDate(selectedDate);
+			isOnline = true;
+			processSyncQueue();
 		});
+
 		window.addEventListener('offline', () => {
 			isOnline = false;
 			console.log('App is offline');
@@ -166,6 +267,7 @@
 
 		selectedDate = newDate;
 		fetchMantrasForDate(selectedDate);
+		triggerHapticFeedback('light');
 	}
 
 	// Modified goToToday function to center the slider
@@ -173,6 +275,7 @@
 		selectedDate = new Date();
 		fetchMantrasForDate(selectedDate);
 		centerDateInSlider(selectedDate);
+		triggerHapticFeedback('light');
 	}
 
 	// LocalStorage cache functions
@@ -360,6 +463,7 @@
 		if (isUpdating) return;
 
 		isUpdating = true;
+		triggerHapticFeedback('success');
 
 		// Save the current state for possible rollback
 		const prevMantras = [...mantras];
@@ -379,12 +483,15 @@
 				switchTab(activeIndex);
 			}
 
-			// If offline, we skip the API call
+			// If offline, add to sync queue for later processing
 			if (!isOnline) {
-				console.log('Offline: Saved update to local cache only');
+				console.log('Offline: Saved increment to sync queue');
+				addToSyncQueue(name, selectedDate);
+				isUpdating = false;
 				return;
 			}
 
+			// If online, send the request immediately
 			const response = await fetch(API_URL, {
 				method: 'POST',
 				headers: {
@@ -405,6 +512,7 @@
 		} catch (err) {
 			console.error('Error incrementing mantra:', err);
 			error = `Failed to increment mantra: ${err.message}`;
+			triggerHapticFeedback('error');
 
 			// Revert to previous state on error
 			if (isOnline) {
@@ -413,6 +521,9 @@
 
 				// Refresh to get accurate data
 				await fetchMantrasForDate(selectedDate);
+			} else {
+				// If offline, still add to sync queue despite the error
+				addToSyncQueue(name, selectedDate);
 			}
 		} finally {
 			isUpdating = false;
@@ -423,10 +534,12 @@
 		if (!newMantra.trim()) return;
 		if (!isOnline) {
 			error = 'Cannot add new mantras while offline';
+			triggerHapticFeedback('error');
 			return;
 		}
 
 		isUpdating = true;
+		triggerHapticFeedback('medium');
 
 		try {
 			const response = await fetch(API_URL, {
@@ -449,9 +562,11 @@
 
 			// The POST endpoint doesn't return updated counts, so we need to fetch them
 			await fetchMantrasForDate(selectedDate);
+			triggerHapticFeedback('success');
 		} catch (err) {
 			console.error('Error adding mantra:', err);
 			error = `Failed to add mantra: ${err.message}`;
+			triggerHapticFeedback('error');
 		} finally {
 			isUpdating = false;
 		}
@@ -500,9 +615,11 @@
 		if (swipeDistance > 0) {
 			// Swipe right - go to previous tab
 			switchTab(activeTab === 0 ? mantras.length - 1 : activeTab - 1);
+			triggerHapticFeedback('light');
 		} else {
 			// Swipe left - go to next tab
 			switchTab(activeTab === mantras.length - 1 ? 0 : activeTab + 1);
+			triggerHapticFeedback('light');
 		}
 	}
 </script>
@@ -600,6 +717,7 @@
 									if (!isDateInFuture(date)) {
 										selectedDate = date;
 										fetchMantrasForDate(date);
+										triggerHapticFeedback('light');
 									}
 								}}
 								disabled={isDateInFuture(date)}
@@ -612,12 +730,31 @@
 			</div>
 
 			<div class="container mx-auto max-w-md flex-grow overflow-y-auto px-4 py-4">
+				<!-- Sync queue indicator -->
+				{#if syncQueue.length > 0}
+					<div class="mb-6 rounded-r-md border-l-4 border-blue-500 bg-blue-50 p-4 shadow-sm">
+						<p class="font-medium text-blue-700">Offline Changes Pending</p>
+						<p class="mt-1 text-blue-600">
+							{syncQueue.length} change{syncQueue.length !== 1 ? 's' : ''} will sync when you're back
+							online.
+						</p>
+						{#if isOnline}
+							<button
+								on:click={processSyncQueue}
+								class="mt-2 rounded bg-blue-500 px-3 py-1 text-sm text-white hover:bg-blue-600"
+							>
+								Sync Now
+							</button>
+						{/if}
+					</div>
+				{/if}
+
 				<!-- Offline indicator -->
 				{#if !isOnline}
 					<div class="mb-6 rounded-r-md border-l-4 border-amber-500 bg-amber-50 p-4 shadow-sm">
 						<p class="font-medium text-amber-700">Offline Mode</p>
 						<p class="mt-1 text-amber-600">
-							You're currently offline. Some features may be limited.
+							You're currently offline. Your counts will sync when you reconnect.
 						</p>
 					</div>
 				{/if}
@@ -645,6 +782,7 @@
 								<p>Selected date: {format(selectedDate, 'yyyy-MM-dd')}</p>
 								<p>Online status: {isOnline ? 'Online' : 'Offline'}</p>
 								<p>Active tab: {activeTab}</p>
+								<p>Sync queue: {syncQueue.length} items</p>
 								<button
 									on:click={() => fetchMantrasForDate(selectedDate)}
 									class="mt-2 flex w-full items-center justify-center gap-2 rounded-md bg-teal-500 px-4 py-2 text-white shadow-sm transition-all duration-300 hover:bg-teal-600 focus:outline-none disabled:opacity-50"
@@ -801,7 +939,10 @@
 									class="flex-1 px-4 py-3 text-center transition-colors {activeTab === index
 										? 'border-b-2 border-teal-500 bg-teal-50 font-medium text-teal-700'
 										: 'text-teal-600 hover:bg-teal-50'}"
-									on:click={() => switchTab(index)}
+									on:click={() => {
+										switchTab(index);
+										triggerHapticFeedback('light');
+									}}
 									aria-selected={activeTab === index}
 									role="tab"
 								>
