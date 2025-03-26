@@ -23,7 +23,7 @@
 	let error = null;
 	let newMantra = '';
 	let rawResponse = null; // For debugging
-	let activeTab = 0; // Track active tab
+	let isOnline = true; // Track online status
 
 	// Date navigation state
 	let selectedDate = new Date(); // Default to today
@@ -35,6 +35,34 @@
 
 	// API endpoint
 	const API_URL = 'https://automator.congzhoumachinery.com/webhook/mantras';
+
+	// Persistent active tab
+	function getLastActiveTab() {
+		try {
+			const savedTab = localStorage.getItem('lastActiveTab');
+			return savedTab ? parseInt(savedTab, 10) : 0;
+		} catch (e) {
+			console.error('Failed to get last active tab:', e);
+			return 0;
+		}
+	}
+
+	function setLastActiveTab(tabIndex) {
+		try {
+			localStorage.setItem('lastActiveTab', String(tabIndex));
+		} catch (e) {
+			console.error('Failed to save last active tab:', e);
+		}
+	}
+
+	// Initialize activeTab from localStorage
+	let activeTab = getLastActiveTab();
+
+	// Tab switching function
+	function switchTab(index) {
+		activeTab = index;
+		setLastActiveTab(index);
+	}
 
 	// Date navigation helper functions
 	function isDateInFuture(date) {
@@ -48,7 +76,6 @@
 	}
 
 	// Generate a range of dates for the slider
-	// Generate a balanced range of dates for the slider (past and future)
 	function getDateRange() {
 		const today = new Date();
 		const daysSinceMarch1 = Math.max(0, Math.floor((today - MARCH_1_2025) / (1000 * 60 * 60 * 24)));
@@ -92,16 +119,34 @@
 		}, 100); // Small delay to ensure DOM is updated
 	}
 
-	
-
+	// Check online status
+	function checkOnlineStatus() {
+		isOnline = navigator.onLine;
+		if (!isOnline) {
+			console.log('App is offline, using cached data');
+		}
+	}
 
 	// Modify onMount to center the slider on today when component loads
 	onMount(() => {
 		console.log('Component mounted, fetching mantras...');
+		checkOnlineStatus();
+
+		// Add online/offline event listeners
+		window.addEventListener('online', () => {
+			isOnline = true;
+			console.log('App is back online');
+			fetchMantrasForDate(selectedDate);
+		});
+		window.addEventListener('offline', () => {
+			isOnline = false;
+			console.log('App is offline');
+		});
+
 		fetchMantrasForDate(selectedDate);
 		centerDateInSlider(selectedDate);
 
-		// Register service worker
+		// Register service worker for PWA
 		if ('serviceWorker' in navigator) {
 			navigator.serviceWorker
 				.register('/service-worker.js')
@@ -109,6 +154,7 @@
 				.catch((err) => console.error('Service Worker registration failed:', err));
 		}
 	});
+
 	// Navigation functions
 	function navigateDate(direction) {
 		const newDate = addDays(selectedDate, direction);
@@ -182,12 +228,27 @@
 	function processMantrasData(data) {
 		if (Array.isArray(data)) {
 			let processedData = data.map((item) => ({
-				name: item.json.name,
-				count: item.json.count
+				name: item.json ? item.json.name : item.name,
+				count: item.json ? item.json.count : item.count
 			}));
 
 			// Ensure first and third mantras always exist
 			mantras = ensureDefaultMantras(processedData);
+
+			// Set active tab based on last entry
+			if (mantras.length > 0) {
+				// Find most recent mantra with a count > 0
+				const lastUsedMantra = mantras.reduce((last, current) => {
+					return current.count > 0 && (!last || current.count > last.count) ? current : last;
+				}, null);
+
+				if (lastUsedMantra) {
+					const index = mantras.findIndex((m) => m.name === lastUsedMantra.name);
+					if (index !== -1) {
+						switchTab(index);
+					}
+				}
+			}
 
 			// Cache the processed data
 			saveToLocalCache(selectedDate, mantras);
@@ -232,8 +293,18 @@
 			mantras = cachedData;
 			isLoading = false;
 
-			// Continue with refreshing in background
-			refreshDataInBackground(date);
+			// Continue with refreshing in background if online
+			if (isOnline) {
+				refreshDataInBackground(date);
+			}
+			return;
+		}
+
+		// If offline and no cache, show a message
+		if (!isOnline) {
+			error = "You're offline and no cached data is available for this date.";
+			mantras = ensureDefaultMantras([]);
+			isLoading = false;
 			return;
 		}
 
@@ -264,12 +335,19 @@
 			const data = await fetchWithRetry(`${API_URL}?date=${formattedDate}`);
 
 			if (Array.isArray(data)) {
-				// Process the data and ensure default mantras exist
-				processMantrasData(data);
+				// Process the data
+				let processedData = data.map((item) => ({
+					name: item.json ? item.json.name : item.name,
+					count: item.json ? item.json.count : item.count
+				}));
+
+				// Ensure default mantras and update cache
+				const updatedMantras = ensureDefaultMantras(processedData);
+				saveToLocalCache(date, updatedMantras);
 
 				// Check if we're still on the same date before updating UI
 				if (format(selectedDate, 'yyyy-MM-dd') === formattedDate) {
-					mantras = ensureDefaultMantras(mantras);
+					mantras = updatedMantras;
 				}
 			}
 		} catch (err) {
@@ -283,6 +361,9 @@
 
 		isUpdating = true;
 
+		// Save the current state for possible rollback
+		const prevMantras = [...mantras];
+
 		try {
 			// Optimistic update
 			mantras = mantras.map((mantra) =>
@@ -291,6 +372,18 @@
 
 			// Save to cache immediately for offline-first experience
 			saveToLocalCache(selectedDate, mantras);
+
+			// Set the active tab to the current mantra
+			const activeIndex = mantras.findIndex((m) => m.name === name);
+			if (activeIndex !== -1) {
+				switchTab(activeIndex);
+			}
+
+			// If offline, we skip the API call
+			if (!isOnline) {
+				console.log('Offline: Saved update to local cache only');
+				return;
+			}
 
 			const response = await fetch(API_URL, {
 				method: 'POST',
@@ -312,8 +405,15 @@
 		} catch (err) {
 			console.error('Error incrementing mantra:', err);
 			error = `Failed to increment mantra: ${err.message}`;
-			// Refresh to get accurate data
-			await fetchMantrasForDate(selectedDate);
+
+			// Revert to previous state on error
+			if (isOnline) {
+				mantras = prevMantras;
+				saveToLocalCache(selectedDate, mantras);
+
+				// Refresh to get accurate data
+				await fetchMantrasForDate(selectedDate);
+			}
 		} finally {
 			isUpdating = false;
 		}
@@ -321,6 +421,10 @@
 
 	async function addMantra() {
 		if (!newMantra.trim()) return;
+		if (!isOnline) {
+			error = 'Cannot add new mantras while offline';
+			return;
+		}
 
 		isUpdating = true;
 
@@ -395,19 +499,12 @@
 
 		if (swipeDistance > 0) {
 			// Swipe right - go to previous tab
-			activeTab = activeTab === 0 ? mantras.length - 1 : activeTab - 1;
+			switchTab(activeTab === 0 ? mantras.length - 1 : activeTab - 1);
 		} else {
 			// Swipe left - go to next tab
-			activeTab = activeTab === mantras.length - 1 ? 0 : activeTab + 1;
+			switchTab(activeTab === mantras.length - 1 ? 0 : activeTab + 1);
 		}
 	}
-
-	// Fetch mantras on component mount
-	onMount(() => {
-		console.log('Component mounted, fetching mantras...');
-		fetchMantrasForDate(selectedDate);
-		centerDateInSlider(selectedDate);
-	});
 </script>
 
 <main
@@ -515,6 +612,16 @@
 			</div>
 
 			<div class="container mx-auto max-w-md flex-grow overflow-y-auto px-4 py-4">
+				<!-- Offline indicator -->
+				{#if !isOnline}
+					<div class="mb-6 rounded-r-md border-l-4 border-amber-500 bg-amber-50 p-4 shadow-sm">
+						<p class="font-medium text-amber-700">Offline Mode</p>
+						<p class="mt-1 text-amber-600">
+							You're currently offline. Some features may be limited.
+						</p>
+					</div>
+				{/if}
+
 				<!-- Error message -->
 				{#if error}
 					<div class="mb-6 rounded-r-md border-l-4 border-rose-500 bg-rose-50 p-4 shadow-sm">
@@ -536,6 +643,8 @@
 								<p>API URL: {API_URL}</p>
 								<p>Mantras count: {mantras.length}</p>
 								<p>Selected date: {format(selectedDate, 'yyyy-MM-dd')}</p>
+								<p>Online status: {isOnline ? 'Online' : 'Offline'}</p>
+								<p>Active tab: {activeTab}</p>
 								<button
 									on:click={() => fetchMantrasForDate(selectedDate)}
 									class="mt-2 flex w-full items-center justify-center gap-2 rounded-md bg-teal-500 px-4 py-2 text-white shadow-sm transition-all duration-300 hover:bg-teal-600 focus:outline-none disabled:opacity-50"
@@ -612,7 +721,7 @@
 							<button
 								on:click={addMantra}
 								class="flex items-center justify-center gap-2 rounded-md bg-teal-500 px-4 py-2 text-white shadow-sm transition-all duration-300 hover:bg-teal-600 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
-								disabled={isLoading || isUpdating || !newMantra.trim()}
+								disabled={isLoading || isUpdating || !newMantra.trim() || !isOnline}
 							>
 								{#if isUpdating}
 									<svg
@@ -657,7 +766,6 @@
 						</div>
 					</div>
 				{/if}
-
 				<!-- Loading state -->
 				{#if isLoading && mantras.length === 0}
 					<div class="mb-6 rounded-lg bg-white p-8 shadow-md">
