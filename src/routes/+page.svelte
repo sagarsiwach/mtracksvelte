@@ -11,7 +11,7 @@
 	} from 'date-fns';
 
 	// Configuration
-	const DEBUG = true; // Set to true to show debug information
+	const DEBUG = false; // Set to true to show debug information
 	function getDailyTarget(mantraName) {
 		return mantraName === 'third' ? 1000 : 108;
 	}
