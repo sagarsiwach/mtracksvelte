@@ -11,7 +11,7 @@
 	} from 'date-fns';
 
 	// Configuration
-	const DEBUG = false; // Set to true to show debug information
+	const DEBUG = true; // Set to true to show debug information
 	function getDailyTarget(mantraName) {
 		return mantraName === 'third' ? 1000 : 108;
 	}
@@ -35,7 +35,7 @@
 	let touchEndX = 0;
 
 	// API endpoint
-	const API_URL = 'https://automator.congzhoumachinery.com/webhook/mantras';
+	const API_URL = 'https://automation.unipack.asia/webhook/mantras';
 
 	// Persistent active tab
 	function getLastActiveTab() {
