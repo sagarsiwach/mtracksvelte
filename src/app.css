@@ -1,5 +1,15 @@
 @import 'tailwindcss';
 
+@font-face {
+	font-family: 'Departure Mono';
+	src:
+		url('/fonts/DepartureMono-Regular.woff2') format('woff2'),
+		url('/fonts/DepartureMono-Regular.woff') format('woff');
+	font-weight: normal;
+	font-style: normal;
+	font-display: swap;
+}
+
 @layer components {
 	.btn-primary {
 		@apply bg-blue-600 px-4 py-2 font-medium text-white transition-colors hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:outline-none disabled:cursor-not-allowed disabled:bg-neutral-500;
@@ -19,5 +29,9 @@
 
 	.card {
 		@apply border border-neutral-700 bg-neutral-800 p-5;
+	}
+
+	.font-departure {
+		font-family: 'Departure Mono', monospace;
 	}
 }
