@@ -310,6 +310,15 @@ export async function doIncrementMantra(name) {
 	})();
 	const prevMantras = [...currentMantras];
 
+	// Get current date upfront
+	let currentDate;
+	selectedDate.subscribe((value) => {
+		currentDate = value;
+	})();
+	const formattedDate = formatDate(currentDate, 'yyyy-MM-dd');
+
+	console.log(`Starting increment for mantra: ${name}, date: ${formattedDate}`);
+
 	try {
 		// Optimistic update
 		mantras.update((items) =>
@@ -318,22 +327,9 @@ export async function doIncrementMantra(name) {
 			)
 		);
 
-		let currentDate;
-		selectedDate.subscribe((value) => {
-			currentDate = value;
-		})();
-
 		// Save to cache immediately for offline-first experience
 		mantras.subscribe((value) => {
 			saveToLocalCache(currentDate, value);
-		})();
-
-		// Set the active tab to the current mantra
-		mantras.subscribe((value) => {
-			const activeIndex = value.findIndex((m) => m.name === name);
-			if (activeIndex !== -1) {
-				activeTab.set(activeIndex);
-			}
 		})();
 
 		// If offline, add to sync queue for later processing
@@ -344,13 +340,13 @@ export async function doIncrementMantra(name) {
 			return;
 		}
 
-		// If online, send the request immediately - FIX: Properly await the response
-		console.log(
-			`Sending increment request for mantra: ${name}, date: ${formatDate(currentDate, 'yyyy-MM-dd')}`
-		);
+		// Simple console log for the POST request
+		console.log('Making POST request:', {
+			url: 'https://automation.unipack.asia/webhook/mantras',
+			body: { mantraName: name, date: formattedDate }
+		});
 
-		// Use the direct API call instead of through the wrapper
-		const formattedDate = formatDate(currentDate, 'yyyy-MM-dd');
+		// Make the actual POST request
 		const response = await fetch('https://automation.unipack.asia/webhook/mantras', {
 			method: 'POST',
 			headers: {
@@ -362,49 +358,21 @@ export async function doIncrementMantra(name) {
 			})
 		});
 
-		console.log('Response status:', response.status);
+		console.log('POST response status:', response.status);
 
-		if (!response.ok) {
-			const errorText = await response.text();
-			console.error(`Error response: ${errorText}`);
-			throw new Error(`HTTP error: ${response.status}`);
-		}
-
-		// The POST endpoint doesn't return updated counts, so we need to fetch them
+		// Refresh data to get updated counts
 		await fetchMantrasForDate(currentDate);
 	} catch (err) {
 		console.error('Error incrementing mantra:', err);
+		error.set(`Failed to increment mantra: ${err.message}`);
 
-		// More specific error messages
-		if (
-			err.message.includes('Network connection error') ||
-			err.message.includes('Failed to fetch')
-		) {
-			error.set(
-				"Couldn't increment mantra due to connection issues. Your count has been saved offline."
-			);
-			// If we're offline despite the browser saying we're online
-			addToSyncQueue(name, currentDate);
+		// Revert to previous state on error if online
+		if (navigator.onLine) {
+			mantras.set(prevMantras);
+			saveToLocalCache(currentDate, prevMantras);
 		} else {
-			error.set(`Failed to increment mantra: ${err.message}`);
-			triggerHapticFeedback('error');
-
-			let currentDate;
-			selectedDate.subscribe((value) => {
-				currentDate = value;
-			})();
-
-			// Revert to previous state on error
-			if (navigator.onLine) {
-				mantras.set(prevMantras);
-				saveToLocalCache(currentDate, prevMantras);
-
-				// Refresh to get accurate data
-				await fetchMantrasForDate(currentDate);
-			} else {
-				// If offline, still add to sync queue despite the error
-				addToSyncQueue(name, currentDate);
-			}
+			// If offline, add to sync queue
+			addToSyncQueue(name, currentDate);
 		}
 	} finally {
 		isUpdating.set(false);
