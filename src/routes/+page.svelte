@@ -1,5 +1,5 @@
 <script>
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	import Header from '$lib/components/Header.svelte';
 	import DateNavigation from '$lib/components/DateNavigation.svelte';
 	import StatusIndicators from '$lib/components/StatusIndicators.svelte';
@@ -15,7 +15,10 @@
 		selectedDate,
 		activeTab,
 		checkOnlineStatus,
-		processSyncQueue
+		processSyncQueue,
+		startAutoRefresh,
+		stopAutoRefresh,
+		autoRefreshEnabled
 	} from '$lib/stores/mantraStore';
 
 	import { touchStartX, touchEndX, isOnline, initOnlineStatus } from '$lib/stores/settingsStore';
@@ -78,6 +81,48 @@
 		}
 	}
 
+	// Retry sync after network errors
+	async function attemptResync() {
+		let maxRetries = 3;
+		let retryCount = 0;
+		let retryDelay = 5000; // 5 seconds initial delay
+
+		async function attemptSync() {
+			if (retryCount >= maxRetries) return;
+
+			try {
+				retryCount++;
+				console.log(`Attempting to resync (attempt ${retryCount}/${maxRetries})...`);
+				await processSyncQueue();
+			} catch (err) {
+				console.error(`Resync attempt ${retryCount} failed:`, err);
+
+				// Exponential backoff
+				retryDelay *= 2;
+				setTimeout(attemptSync, retryDelay);
+			}
+		}
+
+		// Start the retry process
+		setTimeout(attemptSync, retryDelay);
+	}
+
+	// Toggle auto-refresh functionality
+	function toggleAutoRefresh() {
+		autoRefreshEnabled.update((current) => !current);
+
+		let isEnabled;
+		autoRefreshEnabled.subscribe((value) => {
+			isEnabled = value;
+		})();
+
+		if (isEnabled) {
+			startAutoRefresh();
+		} else {
+			stopAutoRefresh();
+		}
+	}
+
 	onMount(() => {
 		console.log('Component mounted, fetching mantras...');
 		checkOnlineStatus();
@@ -90,7 +135,11 @@
 		isOnline.subscribe((online) => {
 			if (online) {
 				console.log('App is back online');
-				processSyncQueue();
+				processSyncQueue().catch((err) => {
+					console.error('Error during sync queue processing:', err);
+					// If sync fails when coming back online, retry with backoff
+					attemptResync();
+				});
 			} else {
 				console.log('App is offline');
 			}
@@ -103,6 +152,9 @@
 		fetchMantrasForDate(current);
 		centerDateInSlider(current);
 
+		// Start auto-refresh
+		startAutoRefresh();
+
 		// Register service worker for PWA
 		if ('serviceWorker' in navigator) {
 			navigator.serviceWorker
@@ -111,7 +163,15 @@
 				.catch((err) => console.error('Service Worker registration failed:', err));
 		}
 
-		return cleanup;
+		return () => {
+			cleanup();
+			stopAutoRefresh(); // Ensure we clean up the interval
+		};
+	});
+
+	onDestroy(() => {
+		// Make sure to clean up the auto-refresh when component is destroyed
+		stopAutoRefresh();
 	});
 </script>
 
@@ -132,6 +192,25 @@
 	<div class="container mx-auto max-w-md flex-grow overflow-y-auto px-4 py-4 pb-20">
 		<!-- Status indicators (offline/sync status) -->
 		<StatusIndicators />
+
+		<!-- Auto-refresh toggle -->
+		<div class="mb-4 flex justify-end">
+			<button
+				on:click={toggleAutoRefresh}
+				class="font-departure flex items-center rounded-md px-3 py-1 text-xs
+				{$autoRefreshEnabled ? 'bg-yellow-600 text-white' : 'bg-yellow-900 text-yellow-400'}"
+			>
+				<svg class="mr-1 h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+					<path
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						stroke-width="2"
+						d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+					/>
+				</svg>
+				{$autoRefreshEnabled ? 'AUTO-REFRESH ON' : 'AUTO-REFRESH OFF'}
+			</button>
+		</div>
 
 		<!-- Loading state or empty state -->
 		<LoadingIndicator />

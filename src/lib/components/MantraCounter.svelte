@@ -23,11 +23,18 @@
 		}, 500);
 	}
 
-	// Handle increment with animation
-	function handleIncrement() {
+	// Handle increment with animation and logging
+	async function handleIncrement() {
 		if ($mantras[$activeTab]) {
-			doIncrementMantra($mantras[$activeTab].name);
-			animateCount();
+			console.log(`Tapping on ${$mantras[$activeTab].name} mantra`);
+
+			try {
+				await doIncrementMantra($mantras[$activeTab].name);
+				animateCount();
+				console.log('Increment successful');
+			} catch (error) {
+				console.error('Error during increment:', error);
+			}
 		}
 	}
 </script>

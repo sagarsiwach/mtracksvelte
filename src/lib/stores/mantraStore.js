@@ -18,9 +18,11 @@ export const syncQueue = writable([]);
 export const selectedDate = writable(new Date());
 export const activeTab = writable(0);
 export const rawResponse = writable(null); // For debugging
+export const autoRefreshEnabled = writable(true); // Control auto-refresh
 
 // State
 let isOnline = true;
+let autoRefreshInterval = null;
 
 // Check online status
 export function checkOnlineStatus() {
@@ -34,6 +36,41 @@ export function checkOnlineStatus() {
 	}
 
 	return isOnline;
+}
+
+// Start auto-refresh timer
+export function startAutoRefresh() {
+	// Clear any existing interval first
+	if (autoRefreshInterval) {
+		clearInterval(autoRefreshInterval);
+	}
+
+	autoRefreshInterval = setInterval(() => {
+		let currentValue;
+		autoRefreshEnabled.subscribe((value) => {
+			currentValue = value;
+		})();
+
+		if (currentValue && navigator.onLine) {
+			console.log('Auto-refreshing mantras data...');
+			let current;
+			selectedDate.subscribe((value) => {
+				current = value;
+			})();
+			refreshDataInBackground(current);
+		}
+	}, 5000); // Refresh every 5 seconds
+
+	console.log('Auto-refresh started');
+}
+
+// Stop auto-refresh timer
+export function stopAutoRefresh() {
+	if (autoRefreshInterval) {
+		clearInterval(autoRefreshInterval);
+		autoRefreshInterval = null;
+		console.log('Auto-refresh stopped');
+	}
 }
 
 // Process mantras data and ensure first/third exist
@@ -105,7 +142,7 @@ function addToSyncQueue(mantraName, date) {
 	syncQueue.set(queue); // Update store
 }
 
-// Process pending sync items
+// Process pending sync items with improved batch processing
 export async function processSyncQueue() {
 	let currentQueue;
 	syncQueue.subscribe((value) => {
@@ -116,37 +153,57 @@ export async function processSyncQueue() {
 
 	console.log(`Processing sync queue with ${currentQueue.length} items...`);
 
-	// Process each item one by one
+	// Process in batches to avoid overwhelming the API
+	const BATCH_SIZE = 5;
 	const queue = [...currentQueue];
-	syncQueue.set([]); // Clear store
-	saveSyncQueue([]); // Clear stored queue
+
+	// Clear stored queue immediately to prevent duplications
+	syncQueue.set([]);
+	saveSyncQueue([]);
 
 	let currentDate;
 	selectedDate.subscribe((value) => {
 		currentDate = value;
 	})();
 
-	// Process each sync item individually
-	for (const item of queue) {
-		try {
-			console.log(`Syncing ${item.mantraName} for date ${item.date}...`);
+	// Create a temporary queue for failed items
+	const failedItems = [];
 
-			await incrementMantra(item.mantraName, new Date(item.date));
+	// Process in batches
+	for (let i = 0; i < queue.length; i += BATCH_SIZE) {
+		const batch = queue.slice(i, i + BATCH_SIZE);
 
-			// Small delay between requests to prevent overwhelming the server
-			await new Promise((resolve) => setTimeout(resolve, 300));
-		} catch (err) {
-			console.error(`Failed to sync item: ${JSON.stringify(item)}`, err);
-			// If this item fails, add it back to the queue
-			addToSyncQueue(item.mantraName, new Date(item.date));
+		// Process each item in the batch
+		await Promise.all(
+			batch.map(async (item) => {
+				try {
+					console.log(`Syncing ${item.mantraName} for date ${item.date}...`);
+					await incrementMantra(item.mantraName, new Date(item.date));
+				} catch (err) {
+					console.error(`Failed to sync item: ${JSON.stringify(item)}`, err);
+					// Add failed items back to the failed queue
+					failedItems.push(item);
+				}
+			})
+		);
+
+		// Small delay between batches
+		if (i + BATCH_SIZE < queue.length) {
+			await new Promise((resolve) => setTimeout(resolve, 500));
 		}
+	}
+
+	// If any items failed, add them back to the queue
+	if (failedItems.length > 0) {
+		saveSyncQueue(failedItems);
+		syncQueue.set(failedItems);
 	}
 
 	// After syncing, refresh the current view
 	await fetchMantrasForDate(currentDate);
 }
 
-// Fetch mantras for date
+// Fetch mantras for date with improved caching and error handling
 export async function fetchMantrasForDate(date) {
 	isLoading.set(true);
 	error.set(null);
@@ -188,7 +245,13 @@ export async function fetchMantrasForDate(date) {
 		saveToLocalCache(date, processedMantras);
 	} catch (err) {
 		console.error('Error fetching mantras:', err);
-		error.set(`Failed to load mantras: ${err.message}`);
+
+		// More user-friendly error message based on error type
+		if (err.message.includes('Network connection error')) {
+			error.set('Unable to connect to the server. Please check your internet connection.');
+		} else {
+			error.set(`Failed to load mantras: ${err.message}`);
+		}
 
 		// If error, ensure we still have first and third mantras with zero counts
 		mantras.set(ensureDefaultMantras([]));
@@ -229,7 +292,13 @@ async function refreshDataInBackground(date) {
 }
 
 export async function doIncrementMantra(name) {
-	if (isUpdating) return;
+	// Fix the incorrect property access - use direct subscribe pattern instead
+	let isCurrentlyUpdating = false;
+	isUpdating.subscribe((value) => {
+		isCurrentlyUpdating = value;
+	})();
+
+	if (isCurrentlyUpdating) return;
 
 	isUpdating.set(true);
 	triggerHapticFeedback('success');
@@ -275,10 +344,29 @@ export async function doIncrementMantra(name) {
 			return;
 		}
 
-		// If online, send the request immediately
-		const response = await incrementMantra(name, currentDate);
+		// If online, send the request immediately - FIX: Properly await the response
+		console.log(
+			`Sending increment request for mantra: ${name}, date: ${formatDate(currentDate, 'yyyy-MM-dd')}`
+		);
+
+		// Use the direct API call instead of through the wrapper
+		const formattedDate = formatDate(currentDate, 'yyyy-MM-dd');
+		const response = await fetch('https://automation.unipack.asia/webhook/mantras', {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json'
+			},
+			body: JSON.stringify({
+				mantraName: name,
+				date: formattedDate
+			})
+		});
+
+		console.log('Response status:', response.status);
 
 		if (!response.ok) {
+			const errorText = await response.text();
+			console.error(`Error response: ${errorText}`);
 			throw new Error(`HTTP error: ${response.status}`);
 		}
 
@@ -286,24 +374,37 @@ export async function doIncrementMantra(name) {
 		await fetchMantrasForDate(currentDate);
 	} catch (err) {
 		console.error('Error incrementing mantra:', err);
-		error.set(`Failed to increment mantra: ${err.message}`);
-		triggerHapticFeedback('error');
 
-		let currentDate;
-		selectedDate.subscribe((value) => {
-			currentDate = value;
-		})();
-
-		// Revert to previous state on error
-		if (navigator.onLine) {
-			mantras.set(prevMantras);
-			saveToLocalCache(currentDate, prevMantras);
-
-			// Refresh to get accurate data
-			await fetchMantrasForDate(currentDate);
-		} else {
-			// If offline, still add to sync queue despite the error
+		// More specific error messages
+		if (
+			err.message.includes('Network connection error') ||
+			err.message.includes('Failed to fetch')
+		) {
+			error.set(
+				"Couldn't increment mantra due to connection issues. Your count has been saved offline."
+			);
+			// If we're offline despite the browser saying we're online
 			addToSyncQueue(name, currentDate);
+		} else {
+			error.set(`Failed to increment mantra: ${err.message}`);
+			triggerHapticFeedback('error');
+
+			let currentDate;
+			selectedDate.subscribe((value) => {
+				currentDate = value;
+			})();
+
+			// Revert to previous state on error
+			if (navigator.onLine) {
+				mantras.set(prevMantras);
+				saveToLocalCache(currentDate, prevMantras);
+
+				// Refresh to get accurate data
+				await fetchMantrasForDate(currentDate);
+			} else {
+				// If offline, still add to sync queue despite the error
+				addToSyncQueue(name, currentDate);
+			}
 		}
 	} finally {
 		isUpdating.set(false);
